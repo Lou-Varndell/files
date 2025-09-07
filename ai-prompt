@@ -1,0 +1,84 @@
+please add a wrapper to log the credentials cache to the following go app.
+The go app connects to a dynamodb hosted in a docker compose localstack.
+I want to log the state of the credentials when they are used and refreshed as well as how much longer the credentials before they expire
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+)
+
+func main() {
+	endpoint := "http://localhost:4566"
+	region := "us-west-2"
+
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(region),
+		config.WithBaseEndpoint(endpoint),
+		config.WithCredentialsProvider(
+			aws.NewCredentialsCache(
+				credentials.StaticCredentialsProvider{
+					Value: aws.Credentials{
+						AccessKeyID:     "test",
+						SecretAccessKey: "test",
+						SessionToken:    "",
+					},
+				},
+			),
+		),
+	)
+	if err != nil {
+		log.Fatalf("unable to load SDK config: %v", err)
+	}
+
+	client := dynamodb.NewFromConfig(cfg)
+
+	tableName := "MyTable"
+	_, err = client.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
+		TableName: &tableName,
+		KeySchema: []types.KeySchemaElement{
+			{AttributeName: aws.String("ID"), KeyType: types.KeyTypeHash},
+		},
+		AttributeDefinitions: []types.AttributeDefinition{
+			{AttributeName: aws.String("ID"), AttributeType: types.ScalarAttributeTypeS},
+		},
+		BillingMode: types.BillingModePayPerRequest,
+	})
+	if err != nil {
+		log.Fatalf("failed to create table: %v", err)
+	}
+	fmt.Println("Table created:", tableName)
+
+	_, err = client.PutItem(context.TODO(), &dynamodb.PutItemInput{
+		TableName: &tableName,
+		Item: map[string]types.AttributeValue{
+			"ID":   &types.AttributeValueMemberS{Value: "123"},
+			"Name": &types.AttributeValueMemberS{Value: "LocalUser"},
+		},
+	})
+	if err != nil {
+		log.Fatalf("failed to put item: %v", err)
+	}
+	fmt.Println("Inserted item into table")
+
+	resp, err := client.GetItem(context.TODO(), &dynamodb.GetItemInput{
+		TableName: &tableName,
+		Key: map[string]types.AttributeValue{
+			"ID": &types.AttributeValueMemberS{Value: "123"},
+		},
+	})
+	if err != nil {
+		log.Fatalf("failed to get item: %v", err)
+	}
+
+	nameAttr := resp.Item["Name"].(*types.AttributeValueMemberS)
+	fmt.Printf("Fetched item: ID=%s, Name=%s\n", "123", nameAttr.Value)
+}
